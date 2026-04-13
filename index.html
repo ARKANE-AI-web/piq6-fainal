@@ -643,11 +643,20 @@
     const propsSnap=await getDocs(propsQ);
     data.ref=generateRef(propsSnap.size);
     data.status=status;
-
-    const docRef=await addDoc(collection(db,'proposals'),data);
-    await deductQuota();
-    currentProposalId=docRef.id;
-    await openProposal(docRef.id);
+    // حفظ الصور في localStorage
+    const logoKey='logo_'+currentUser.uid;
+    const stampKey='stamp_'+currentUser.uid;
+    if(data.logoDataURL)  localStorage.setItem(logoKey,  data.logoDataURL);
+    if(data.stampDataURL) localStorage.setItem(stampKey, data.stampDataURL);
+    const dataForFirestore={...data};
+    delete dataForFirestore.logoDataURL;
+    delete dataForFirestore.stampDataURL;
+    try {
+      const docRef=await addDoc(collection(db,'proposals'),dataForFirestore);
+      await deductQuota();
+      currentProposalId=docRef.id;
+      await openProposal(docRef.id);
+    } catch(e) { alert('خطأ في الحفظ: '+e.message); }
   };
 
   // ===== AI GENERATION =====
@@ -684,13 +693,30 @@
     const propsSnap=await getDocs(propsQ);
     data.ref=generateRef(propsSnap.size);
     data.aiText=aiText; data.status='draft';
-    const docRef=await addDoc(collection(db,'proposals'),data);
-    await deductQuota();
-    currentProposalId=docRef.id;
-    renderPreview({id:docRef.id,...data}, aiText);
-    showPage('pagePreview');
-    document.getElementById('aiEditSection').style.display='block';
-    document.getElementById('aiEditTextarea').value=aiText;
+    // حفظ الصور في localStorage بشكل منفصل (Firestore لا يدعم base64 كبيرة)
+    const logoKey = 'logo_' + currentUser.uid;
+    const stampKey = 'stamp_' + currentUser.uid;
+    if (data.logoDataURL)  localStorage.setItem(logoKey,  data.logoDataURL);
+    if (data.stampDataURL) localStorage.setItem(stampKey, data.stampDataURL);
+    const dataForFirestore = {...data};
+    delete dataForFirestore.logoDataURL;
+    delete dataForFirestore.stampDataURL;
+    try {
+      const docRef=await addDoc(collection(db,'proposals'), dataForFirestore);
+      await deductQuota();
+      currentProposalId=docRef.id;
+      const fullData={id:docRef.id,...dataForFirestore,
+        logoDataURL: localStorage.getItem(logoKey)||null,
+        stampDataURL: localStorage.getItem(stampKey)||null};
+      renderPreview(fullData, aiText);
+      showPage('pagePreview');
+      document.getElementById('aiEditSection').style.display='block';
+      document.getElementById('aiEditTextarea').value=aiText;
+    } catch(e) {
+      clearInterval(timer);
+      closeModal('aiGeneratingModal');
+      alert('خطأ في الحفظ: ' + e.message);
+    }
   };
 
   window.confirmAIText = async () => {
@@ -708,6 +734,11 @@
     if (!snap.exists())return;
     currentProposalId=id;
     const p={id,...snap.data()};
+    // استرجاع الصور من localStorage
+    if(currentUser){
+      p.logoDataURL  = localStorage.getItem('logo_'+p.userId)  || null;
+      p.stampDataURL = localStorage.getItem('stamp_'+p.userId) || null;
+    }
     renderPreview(p, p.aiText);
     showPage('pagePreview');
     document.getElementById('aiEditSection').style.display='none';
