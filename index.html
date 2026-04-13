@@ -860,7 +860,14 @@
     const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     const rand4=()=>Array.from({length:4},()=>chars[Math.floor(Math.random()*chars.length)]).join('');
     const code=`PQ-${rand4()}-${rand4()}`;
-    await addDoc(collection(db,'tokens'),{code,plan,used:false,createdAt:serverTimestamp()});
+    // حفظ في localStorage أولاً (يشتغل دائماً بدون auth)
+    const localTokens=JSON.parse(localStorage.getItem('pq_tokens')||'[]');
+    localTokens.push({code,plan,used:false,createdAt:new Date().toISOString()});
+    localStorage.setItem('pq_tokens',JSON.stringify(localTokens));
+    // حاول حفظ في Firestore إذا في مستخدم مسجّل
+    try {
+      await addDoc(collection(db,'tokens'),{code,plan,used:false,createdAt:serverTimestamp()});
+    } catch(e) { /* بدون auth يحفظ في localStorage بس */ }
     document.getElementById('newTokenCode').textContent=code;
     document.getElementById('newTokenResult').style.display='block';
     const msg=encodeURIComponent(`مرحباً 👋\nرمز تفعيل ProposalIQ:\n*${code}*\nأدخله في المنصة لتفعيل اشتراكك.`);
@@ -871,10 +878,18 @@
   window.copyToken = () => { navigator.clipboard.writeText(document.getElementById('newTokenCode').textContent); alert('تم النسخ ✅'); };
 
   async function renderTokensList() {
-    const snap=await getDocs(collection(db,'tokens'));
-    const tokens=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
     const container=document.getElementById('tokensList');
     container.innerHTML='';
+    let tokens=[];
+    // جرب Firestore أولاً
+    try {
+      const snap=await getDocs(collection(db,'tokens'));
+      if(!snap.empty) tokens=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+      else throw new Error('empty');
+    } catch(e) {
+      // fallback: localStorage
+      tokens=JSON.parse(localStorage.getItem('pq_tokens')||'[]').slice().reverse();
+    }
     if(!tokens.length){container.innerHTML='<div style="text-align:center;padding:18px;color:var(--muted);">لا يوجد رموز بعد</div>';return;}
     tokens.forEach(t=>{
       const item=document.createElement('div'); item.className='token-item';
