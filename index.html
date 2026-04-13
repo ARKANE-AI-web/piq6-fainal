@@ -200,11 +200,19 @@
   onAuthStateChanged(auth, async user => {
     if (user) {
       currentUser = user;
-      const snap = await getDoc(doc(db,'users',user.uid));
-      if (snap.exists()) {
+      let snap = null;
+      for (let i = 0; i < 5; i++) {
+        snap = await getDoc(doc(db,'users',user.uid));
+        if (snap.exists()) break;
+        await new Promise(r => setTimeout(r, 700));
+      }
+      if (snap && snap.exists()) {
         currentUserDoc = {id:user.uid, ...snap.data()};
         updateNavBar(currentUserDoc);
         if (!checkClientViewParam()) goToDashboard();
+      } else {
+        updateNavBar(null);
+        if (!checkClientViewParam()) showPage('pageHome');
       }
     } else {
       currentUser=null; currentUserDoc=null;
