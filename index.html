@@ -16,7 +16,7 @@
 <script type="module">
                 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
                 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-                import { getFirestore, doc, setDoc, getDoc, updateDoc, collection, addDoc, query, where, getDocs, onSnapshot, serverTimestamp, increment, deleteDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+                import { getFirestore, doc, setDoc, getDoc, updateDoc, collection, addDoc, query, where, getDocs, onSnapshot, serverTimestamp, increment } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
                 const firebaseConfig = {
                                 apiKey: "AIzaSyChxttvld06MmlSTD4JB11mYZNA06AP4T8",
@@ -526,29 +526,52 @@
                 }
 
                 async function applyToken(code, errId) {
-        if (!code || !code.startsWith('PQ-')) { showError(errId, 'صيغة الرمز غير صحيحة'); return false; }
-        const q = query(collection(db,'activationCodes'), where('code','==',code), where('isUsed','==',false));
-        const snap = await getDocs(q);
-        if (snap.empty) { showError(errId,'الرمز غير صحيح أو مستخدم مسبقاً'); return false; }
-        const tokenDoc = snap.docs[0];
-        const plan = tokenDoc.data().planType;
-        const cfg = PLAN_CONFIG[plan] || {quota:30, months:1};
-        const expiry = new Date();
-        expiry.setMonth(expiry.getMonth() + cfg.months);
-        await updateDoc(doc(db,'activationCodes', tokenDoc.id), { isUsed: true, usedBy: currentUser.uid, usedAt: serverTimestamp() });
-        await updateDoc(doc(db,'users', currentUser.uid), { plan, quota: cfg.quota, quotaUsed: 0, expiry: expiry.toISOString() });
-        if (currentUserDoc?.companyId) {
-            await updateDoc(doc(db,'companies', currentUserDoc.companyId), { plan, quota: cfg.quota, expiry: expiry.toISOString() });
-            const agentsQ = query(collection(db,'users'), where('companyId','==',currentUserDoc.companyId), where('role','==','agent'));
-            const agentsSnap = await getDocs(agentsQ);
-            await Promise.all(agentsSnap.docs.map(ag => updateDoc(doc(db,'users',ag.id), {plan, quota:cfg.quota, expiry:expiry.toISOString()})));
-        }
-        const freshSnap = await getDoc(doc(db,'users',currentUser.uid));
-        if (freshSnap.exists()) currentUserDoc = {id:currentUser.uid,...freshSnap.data()};
-        return true;
-    }
+                                const q = query(collection(db,'tokens'), where('code','==',code), where('used','==',false));
+                                const snap = await getDocs(q);
+                                if (snap.empty) { showError(errId,'الرمز غير صحيح أو مستخَدم مسبقاً'); return false; }
+                                const tokenDoc = snap.docs[0];
+                                const plan = tokenDoc.data().plan;
+                                const cfg = PLAN_CONFIG[plan]||{quota:30,months:1};
+                                const expiry = new Date(); expiry.setMonth(expiry.getMonth()+cfg.months);
 
-    async function checkQuota() {
+                                await updateDoc(doc(db,'tokens',tokenDoc.id),{used:true, usedBy:currentUser.uid, usedAt:serverTimestamp()});
+                                await updateDoc(doc(db,'users',currentUser.uid),{plan, quota:cfg.quota, quotaUsed:0, expiry:expiry.toISOString()});
+
+                                // update company too
+                                if (currentUserDoc?.companyId) {
+                                                await updateDoc(doc(db,'companies',currentUserDoc.companyId),{plan, quota:cfg.quota, expiry:expiry.toISOString()});
+                                                // update all agents in company
+                                                const agentsQ = query(collection(db,'users'), where('companyId','==',currentUserDoc.companyId), where('role','==','agent'));
+                                                const agentsSnap = await getDocs(agentsQ);
+                                                agentsSnap.forEach(async ag => {
+                                                                await updateDoc(doc(db,'users',ag.id),{plan, quota:cfg.quota, expiry:expiry.toISOString()});
+                                                });
+                                }
+
+                                const freshSnap = await getDoc(doc(db,'users',currentUser.uid));
+                                if (freshSnap.exists()) currentUserDoc = {id:currentUser.uid,...freshSnap.data()};
+                                return true;
+                }
+
+                window.doActivateDash = async (inputId, errId) => {
+                                const code = (document.getElementById(inputId)?.value||'').trim().toUpperCase();
+                                if (!code) { showError(errId,'أدخل رمز التفعيل'); return; }
+                                if (await applyToken(code,errId)) {
+                                                if (currentUserDoc?.role==='manager') refreshManagerDash(); else refreshAgentDash();
+                                }
+                };
+
+                window.doActivate = async () => {
+                                const code = document.getElementById('activationCode').value.trim().toUpperCase();
+                                if (await applyToken(code,'activateError')) {
+                                                const cfg = PLAN_CONFIG[currentUserDoc?.plan]||PLAN_CONFIG.free;
+                                                document.getElementById('activateDetails').innerHTML=`<div style="font-size:.85rem;color:var(--muted)">الباقة: <strong>${escapeHtml(cfg.name)}</strong> · رصيد العروض: <strong>${cfg.quota}</strong></div>`;
+                                                document.getElementById('activateSuccess').style.display='block';
+                                                if (currentUserDoc?.role==='manager') refreshManagerDash(); else refreshAgentDash();
+                                }
+                };
+
+                async function checkQuota() {
                                 if (!currentUserDoc) return true;
                                 const snap = await getDoc(doc(db,'users',currentUser.uid));
                                 const u = snap.data();
@@ -937,54 +960,52 @@
                 };
 
                 window.generateToken = async () => {
-        const planType = document.getElementById('tokenPlan').value;
-        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-        const rand4 = () => Array.from({length:4}, () => chars[Math.floor(Math.random()*chars.length)]).join('');
-        const code = 'PQ-' + rand4() + '-' + rand4();
-        try {
-            await addDoc(collection(db,'activationCodes'), { code, planType, isUsed: false, createdAt: serverTimestamp(), createdBy: 'admin' });
-        } catch(e) { alert('خطأ: ' + e.message); return; }
-        document.getElementById('newTokenCode').textContent = code;
-        document.getElementById('newTokenResult').style.display = 'block';
-        const msg = encodeURIComponent('مرحباً 👋
-رمز تفعيل ProposalIQ:
-*' + code + '*
-أدخله في المنصة لتفعيل اشتراكك.');
-        document.getElementById('tokenWaLink').href = 'https://wa.me/' + WA_NUMBER + '?text=' + msg;
-        renderTokensList();
-    };
+                                const plan=document.getElementById('tokenPlan').value;
+                                const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+                                const rand4=()=>Array.from({length:4},()=>chars[Math.floor(Math.random()*chars.length)]).join('');
+                                const code=`PQ-${rand4()}-${rand4()}`;
 
-    window.copyToken = () => {
+                                const localTokens=JSON.parse(localStorage.getItem('pq_tokens')||'[]');
+                                localTokens.push({code,plan,used:false,createdAt:new Date().toISOString()});
+                                localStorage.setItem('pq_tokens',JSON.stringify(localTokens));
+
+                                try {
+                                                await addDoc(collection(db,'tokens'),{code,plan,used:false,createdAt:serverTimestamp()});
+                                } catch(e) { /* fallback: localStorage only */ }
+
+                                document.getElementById('newTokenCode').textContent=code;
+                                document.getElementById('newTokenResult').style.display='block';
+                                const msg=encodeURIComponent(`مرحباً 👋\nرمز تفعيل ProposalIQ:\n*${code}*\nأدخله في المنصة لتفعيل اشتراكك.`);
+                                document.getElementById('tokenWaLink').href=`https://wa.me/${WA_NUMBER}?text=${msg}`;
+                                renderTokensList();
+                };
+
+                window.copyToken = () => {
                                 navigator.clipboard.writeText(document.getElementById('newTokenCode').textContent);
                                 alert('تم النسخ ✅');
                 };
 
                 async function renderTokensList() {
-        const container = document.getElementById('tokensList');
-        container.innerHTML = '<div style="text-align:center;padding:14px;color:var(--muted)">جارٍ التحميل...</div>';
-        try {
-            const snap = await getDocs(collection(db,'activationCodes'));
-            const tokens = snap.docs.map(d => ({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
-            if (!tokens.length) { container.innerHTML = '<div style="text-align:center;padding:18px;color:var(--muted)">لا يوجد رموز بعد</div>'; return; }
-            container.innerHTML = '';
-            tokens.forEach(t => {
-                const item = document.createElement('div'); item.className='token-item';
-                const planName = PLAN_CONFIG[t.planType]?.name || t.planType || '—';
-                const isUsed = t.isUsed === true;
-                const delBtn = isUsed ? '' : '<button class="btn btn-danger btn-sm" onclick="deleteActivationCode('' + t.id + '')">🗑</button>';
-                item.innerHTML = '<span class="token-code">' + escapeHtml(t.code) + '</span><span style="font-size:.8rem;color:var(--muted);">' + escapeHtml(planName) + '</span><span class="status-badge ' + (isUsed?'s-accepted':'s-draft') + '">' + (isUsed?'مستخدَم':'متاح') + '</span>' + delBtn;
-                container.appendChild(item);
-            });
-        } catch(e) { container.innerHTML = '<div style="text-align:center;padding:14px;color:var(--danger)">خطأ</div>'; }
-    }
+                                const container=document.getElementById('tokensList');
+                                container.innerHTML='';
+                                let tokens=[];
+                                try {
+                                                const snap=await getDocs(collection(db,'tokens'));
+                                                if(!snap.empty) tokens=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+                                                else throw new Error('empty');
+                                } catch(e) {
+                                                tokens=JSON.parse(localStorage.getItem('pq_tokens')||'[]').slice().reverse();
+                                }
+                                if(!tokens.length){container.innerHTML='<div style="text-align:center;padding:18px;color:var(--muted)">لا يوجد رموز بعد</div>';return;}
+                                tokens.forEach(t => {
+                                                const item=document.createElement('div'); item.className='token-item';
+                                                const planName=PLAN_CONFIG[t.plan]?.name||t.plan;
+                                                item.innerHTML=`<span class="token-code">${escapeHtml(t.code)}</span><span style="font-size:.8rem;color:var(--muted);">${escapeHtml(planName)}</span><span class="status-badge ${t.used?'s-accepted':'s-draft'}">${t.used?'مستخدَم':'متاح'}</span>`;
+                                                container.appendChild(item);
+                                });
+                }
 
-    window.deleteActivationCode = async (docId) => {
-        if (!confirm('حذف هذا الرمز نهائياً؟')) return;
-        try { await deleteDoc(doc(db,'activationCodes', docId)); renderTokensList(); }
-        catch(e) { alert('خطأ: ' + e.message); }
-    };
-
-    function checkClientViewParam() {
+                function checkClientViewParam() {
                                 const params=new URLSearchParams(window.location.search);
                                 const trackId=params.get('track');
                                 if(!trackId)return false;
