@@ -548,25 +548,7 @@
         return true;
     }
 
-    window.doActivateDash = async (inputId, errId) => {
-                                const code = (document.getElementById(inputId)?.value||'').trim().toUpperCase();
-                                if (!code) { showError(errId,'أدخل رمز التفعيل'); return; }
-                                if (await applyToken(code,errId)) {
-                                                if (currentUserDoc?.role==='manager') refreshManagerDash(); else refreshAgentDash();
-                                }
-                };
-
-                window.doActivate = async () => {
-                                const code = document.getElementById('activationCode').value.trim().toUpperCase();
-                                if (await applyToken(code,'activateError')) {
-                                                const cfg = PLAN_CONFIG[currentUserDoc?.plan]||PLAN_CONFIG.free;
-                                                document.getElementById('activateDetails').innerHTML=`<div style="font-size:.85rem;color:var(--muted)">الباقة: <strong>${escapeHtml(cfg.name)}</strong> · رصيد العروض: <strong>${cfg.quota}</strong></div>`;
-                                                document.getElementById('activateSuccess').style.display='block';
-                                                if (currentUserDoc?.role==='manager') refreshManagerDash(); else refreshAgentDash();
-                                }
-                };
-
-                async function checkQuota() {
+    async function checkQuota() {
                                 if (!currentUserDoc) return true;
                                 const snap = await getDoc(doc(db,'users',currentUser.uid));
                                 const u = snap.data();
@@ -993,7 +975,7 @@
                 item.innerHTML = '<span class="token-code">' + escapeHtml(t.code) + '</span><span style="font-size:.8rem;color:var(--muted);">' + escapeHtml(planName) + '</span><span class="status-badge ' + (isUsed?'s-accepted':'s-draft') + '">' + (isUsed?'مستخدَم':'متاح') + '</span>' + delBtn;
                 container.appendChild(item);
             });
-        } catch(e) { container.innerHTML = '<div style="text-align:center;padding:14px;color:var(--danger)">خطأ في التحميل</div>'; }
+        } catch(e) { container.innerHTML = '<div style="text-align:center;padding:14px;color:var(--danger)">خطأ</div>'; }
     }
 
     window.deleteActivationCode = async (docId) => {
